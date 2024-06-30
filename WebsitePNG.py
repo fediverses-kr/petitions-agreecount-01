@@ -1,4 +1,4 @@
-from flask import Flask, render_template_string, send_file, make_response
+from flask import Flask, render_template_string, send_file, send_from_directory, make_response
 import matplotlib
 matplotlib.use('Agg')  # Use Agg backend for rendering plots
 import matplotlib.pyplot as plt
@@ -38,6 +38,12 @@ def create_graph(dataframe):
     buf.seek(0)
     plt.close()
     return buf
+
+# Route to serve the image only with direct access
+@app.route('/private/<path:filename>')
+def serve_image(filename):
+    return send_from_directory('private', filename)
+
 
 # Route for serving the graph image
 @app.route('/graph.png')
@@ -96,7 +102,8 @@ def index():
             <h2><a href="https://petitions-agreecount-02.fediverses.kr/">그래프로 보기</a><h2>
             <h2>Current: {{ latest_count }} ({{ latest_timestamp }})</h2>
             <img src="{{ url_for('graph_png') }}?t={{ latest_timestamp }}" alt="Agree Count Graph">
-            <h2><a href="https://petitions.assembly.go.kr/proceed/afterEstablished/14CBAF8CE5733410E064B49691C1987F">동의하러 가기</a></h2>
+<!--        <h2><a href="https://petitions.assembly.go.kr/proceed/afterEstablished/14CBAF8CE5733410E064B49691C1987F">동의하러 가기</a></h2> -->
+            <h3><a href="https://namu.wiki/thread/RoughFurtiveAngryFather#19">나O위키에서 이 웹사이트의 "동의하러 가기"라는 문구가 정치적으로 편향된 내용이라고 판단했음을 발견하여, 이 사이트는 정치적으로 편향된 내용을 올릴 의도가 없음을 알리기 위해 바로가기 링크를 삭제하였습니다.</a></h3>
             <p>본 사이트는 국회와 관련이 있지 않으며 국회와 아무 연관이 있지 않습니다. 개인이 사용하기 위하여 만들은 사이트이며, 국회 서버에 심한 부하를 주지 않도록 설계하였습니다.</p>
             <p>본 사이트는 운영이 중단될 수 있으며, 기본 업데이트 빈도는 5초+(국회서버 응답시간) 입니다.</p>
         </body>
