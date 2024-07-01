@@ -4,29 +4,28 @@ matplotlib.use('Agg')  # Use Agg backend for rendering plots
 import matplotlib.pyplot as plt
 import pandas as pd
 from datetime import datetime
-from flask_socketio import SocketIO
+from flask_socketio import SocketIO, emit
 import threading
 import time
 import os
 import io
 import logging
-import json
 
 app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins="*")
-logging.basicConfig(level=logging.INFO)  # Set logging level to INFO
+logging.basicConfig(level=logging.DEBUG)  # Set logging level to DEBUG for troubleshooting
+
+update_active = True  # Global variable to control updates
+graph_cache = None  # Cache for the graph image
+last_modified = 0  # Timestamp of the last modification to the log file
 
 # Function to read the log file and return a DataFrame
 def read_log_file(file_path):
-    data = []
     try:
-        with open(file_path, 'r') as file:
-            for line in file:
-                parts = line.split(': Agree Count = ')
-                timestamp = datetime.strptime(parts[0], '%Y-%m-%d %H:%M:%S')
-                agree_count = int(parts[1].strip())
-                data.append({'timestamp': timestamp, 'agree_count': agree_count})
-        return pd.DataFrame(data)
+        data = pd.read_csv(file_path, sep=': Agree Count = ', header=None, names=['timestamp', 'agree_count'], engine='python')
+        data['timestamp'] = pd.to_datetime(data['timestamp'], format='%Y-%m-%d %H:%M:%S')
+        data['agree_count'] = data['agree_count'].astype(int)
+        return data
     except Exception as e:
         app.logger.error(f"Error reading log file: {e}")
         return pd.DataFrame()
@@ -45,22 +44,27 @@ def create_graph(dataframe):
     plt.close()
     return buf
 
-# Function to check for file changes and emit updates
-def check_file_changes():
+# Function to update the graph cache
+def update_graph_cache():
+    global graph_cache, last_modified
     file_path = 'AgreeCountLog.txt'
-    last_modified = os.path.getmtime(file_path)
     
-    while True:
-        time.sleep(5)
-        current_modified = os.path.getmtime(file_path)
-        if current_modified > last_modified:
-            df = read_log_file(file_path)
-            latest_count = df['agree_count'].iloc[-1] if not df.empty else 'No data available'
-            latest_timestamp = df['timestamp'].iloc[-1].strftime('%Y-%m-%d %H:%M:%S') if not df.empty else 'No data available'
-            graph_img = create_graph(df)
-            graph_url = '/graph.png'
-            socketio.emit('update', {'latest_count': str(latest_count), 'latest_timestamp': latest_timestamp, 'graph': graph_url})
+    current_modified = os.path.getmtime(file_path)
+    if current_modified > last_modified:
+        df = read_log_file(file_path)
+        if not df.empty:
+            graph_cache = create_graph(df)
             last_modified = current_modified
+            latest_count = df['agree_count'].iloc[-1]
+            latest_timestamp = df['timestamp'].iloc[-1].strftime('%Y-%m-%d %H:%M:%S')
+            socketio.emit('update', {'latest_count': str(latest_count), 'latest_timestamp': latest_timestamp, 'graph': '/graph.png'})
+
+# Background thread to periodically update the graph cache
+def background_update():
+    while True:
+        if update_active:
+            update_graph_cache()
+        time.sleep(5)
 
 # Route to serve the image only with direct access
 @app.route('/private/<path:filename>')
@@ -70,26 +74,10 @@ def serve_image(filename):
 # Route for serving the graph image
 @app.route('/graph.png')
 def graph_png():
-    try:
-        app.logger.info("Generating graph.png")
-
-        # Path to your log file
-        file_path = 'AgreeCountLog.txt'
-
-        # Read the log file and create the DataFrame
-        df = read_log_file(file_path)
-
-        if df.empty:
-            raise ValueError("DataFrame is empty")
-
-        # Create the graph
-        img_bytes = create_graph(df)
-        app.logger.info("Graph generated successfully")
-
-        return send_file(img_bytes, mimetype='image/png')
-    except Exception as e:
-        app.logger.error(f"Error generating graph: {e}")
-        return make_response(f"Error generating graph: {e}", 500)
+    global graph_cache
+    if graph_cache is None:
+        update_graph_cache()
+    return send_file(io.BytesIO(graph_cache.getvalue()), mimetype='image/png')
 
 # Route for the main page
 @app.route('/')
@@ -218,6 +206,7 @@ def index():
                     socket.on('connect', function() {
                         console.log('WebSocket connected');
                     });
+
                     socket.on('update', function(data) {
                         if (updateActive) {
                             console.log('Received update:', data);
@@ -232,12 +221,14 @@ def index():
 
                     document.getElementById('stopUpdate').addEventListener('click', function() {
                         updateActive = false;
+                        socket.emit('update_status', {active: false});
                         this.style.display = 'none';
                         document.getElementById('resumeUpdate').style.display = 'inline-block';
                     });
 
                     document.getElementById('resumeUpdate').addEventListener('click', function() {
                         updateActive = true;
+                        socket.emit('update_status', {active: true});
                         this.style.display = 'none';
                         document.getElementById('stopUpdate').style.display = 'inline-block';
                     });
@@ -247,7 +238,7 @@ def index():
         <body>
             <div class="container">
                 <h1>윤석열 대통령 탄핵소추안 즉각 발의 요청에 관한 청원</h1>
-                <h2><a href="https://petitions-agreecount-02.fediverses.kr/">그래프로 보기</a></h2>
+                <h2><a href="https://petitions-agreecount-02.fediverses.kr/">그래프로 보기</a> | <a href="https://petitions.assembly.go.kr/status/onGoing/14CBAF8CE5733410E064B49691C1987F">동의하러 가기</a></h2>
                 <div class="current-count">
                     Current: <span id="latest-count" class="rolling-number">{{ latest_count }}</span>
                     <br>
@@ -256,7 +247,6 @@ def index():
                 <button id="stopUpdate" class="button">Stop Update</button>
                 <button id="resumeUpdate" class="button">Resume Update</button>
                 <img id="graph-image" src="{{ url_for('graph_png') }}?t={{ latest_timestamp }}" alt="Agree Count Graph">
-                <h3><a href="https://namu.wiki/thread/RoughFurtiveAngryFather#19">나O위키에서 이 웹사이트의 "동의하러 가기"라는 문구가 정치적으로 편향된 내용이라고 판단했음을 발견하여, 이 사이트는 정치적으로 편향된 내용을 올릴 의도가 없음을 알리기 위해 바로가기 링크를 삭제하였습니다.</a></h3>
                 <div class="footer">
                     <p>본 사이트는 국회와 관련이 있지 않으며 국회와 아무 연관이 있지 않습니다. 개인이 사용하기 위하여 만들은 사이트이며, 국회 서버에 심한 부하를 주지 않도록 설계하였습니다.</p>
                     <p>본 사이트는 운영이 중단될 수 있으며, 기본 업데이트 빈도는 5초+(국회서버 응답시간) 입니다.</p>
@@ -277,8 +267,15 @@ def index():
 def handle_connect():
     app.logger.info(f"Client connected at {datetime.now()}")
 
+@socketio.on('update_status')
+def handle_update_status(data):
+    global update_active
+    update_active = data['active']
+    status = "resumed" if update_active else "stopped"
+    app.logger.info(f"Updates have been {status}.")
+
 if __name__ == '__main__':
-    thread = threading.Thread(target=check_file_changes)
+    thread = threading.Thread(target=background_update)
     thread.daemon = True
     thread.start()
     socketio.run(app, debug=True, port=5173)
