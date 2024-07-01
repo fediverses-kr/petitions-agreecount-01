@@ -64,7 +64,7 @@ def background_update():
     while True:
         if update_active:
             update_graph_cache()
-        time.sleep(5)
+        time.sleep(1)
 
 # Route to serve the image only with direct access
 @app.route('/private/<path:filename>')
@@ -244,8 +244,6 @@ def index():
                     <br>
                     <small>Last updated: <span id="latest-timestamp">{{ latest_timestamp }}</span></small>
                 </div>
-                <button id="stopUpdate" class="button">Stop Update</button>
-                <button id="resumeUpdate" class="button">Resume Update</button>
                 <img id="graph-image" src="{{ url_for('graph_png') }}?t={{ latest_timestamp }}" alt="Agree Count Graph">
                 <div class="footer">
                     <p>본 사이트는 국회와 관련이 있지 않으며 국회와 아무 연관이 있지 않습니다. 개인이 사용하기 위하여 만들은 사이트이며, 국회 서버에 심한 부하를 주지 않도록 설계하였습니다.</p>
@@ -266,13 +264,6 @@ def index():
 @socketio.on('connect')
 def handle_connect():
     app.logger.info(f"Client connected at {datetime.now()}")
-
-@socketio.on('update_status')
-def handle_update_status(data):
-    global update_active
-    update_active = data['active']
-    status = "resumed" if update_active else "stopped"
-    app.logger.info(f"Updates have been {status}.")
 
 if __name__ == '__main__':
     thread = threading.Thread(target=background_update)
