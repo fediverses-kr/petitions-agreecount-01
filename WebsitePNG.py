@@ -3,7 +3,8 @@ import matplotlib
 matplotlib.use('Agg')  # Use Agg backend for rendering plots
 import matplotlib.pyplot as plt
 import pandas as pd
-from datetime import datetime
+import numpy as np  # Import numpy
+from datetime import datetime, timedelta
 from flask_socketio import SocketIO, emit
 import threading
 import time
@@ -18,6 +19,7 @@ logging.basicConfig(level=logging.DEBUG)  # Set logging level to DEBUG for troub
 update_active = True  # Global variable to control updates
 graph_cache = None  # Cache for the graph image
 last_modified = 0  # Timestamp of the last modification to the log file
+user_count = 0  # Global counter for connected users
 
 # Function to read the log file and return a DataFrame
 def read_log_file(file_path):
@@ -44,8 +46,8 @@ def create_graph(dataframe):
     plt.close()
     return buf
 
-# Function to update the graph cache
-def update_graph_cache():
+# Function to update the graph cache and prediction
+def update_graph_cache_and_prediction():
     global graph_cache, last_modified
     file_path = 'AgreeCountLog.txt'
     
@@ -57,26 +59,49 @@ def update_graph_cache():
             last_modified = current_modified
             latest_count = df['agree_count'].iloc[-1]
             latest_timestamp = df['timestamp'].iloc[-1].strftime('%Y-%m-%d %H:%M:%S')
-            socketio.emit('update', {'latest_count': str(latest_count), 'latest_timestamp': latest_timestamp, 'graph': '/graph.png'})
+            target_date = None
+            if latest_count < 1000000:
+                target_date = predict_target_date(df).strftime('%Y-%m-%d %H:%M:%S')
+            socketio.emit('update', {
+                'latest_count': str(latest_count),
+                'latest_timestamp': latest_timestamp,
+                'graph': '/graph.png',
+                'target_date': target_date
+            })
 
-# Background thread to periodically update the graph cache
+# Background thread to periodically update the graph cache and prediction
 def background_update():
     while True:
         if update_active:
-            update_graph_cache()
+            update_graph_cache_and_prediction()
         time.sleep(1)
+
+# Function to predict when the agree count will reach 1,000,000
+def predict_target_date(df, target=1000000):
+    df['time_diff'] = (df['timestamp'] - df['timestamp'].min()).dt.total_seconds()
+    model = np.polyfit(df['time_diff'], df['agree_count'], 1)
+    slope = model[0]
+    intercept = model[1]
+    time_needed = (target - intercept) / slope
+    target_date = df['timestamp'].min() + timedelta(seconds=time_needed)
+    return target_date
 
 # Route to serve the image only with direct access
 @app.route('/private/<path:filename>')
 def serve_image(filename):
     return send_from_directory('private', filename)
 
+# Send the original data on request
+@app.route('/raw_data')
+def serve_file():
+    return send_from_directory('.', 'AgreeCountLog.txt')
+
 # Route for serving the graph image
 @app.route('/graph.png')
 def graph_png():
     global graph_cache
     if graph_cache is None:
-        update_graph_cache()
+        update_graph_cache_and_prediction()
     return send_file(io.BytesIO(graph_cache.getvalue()), mimetype='image/png')
 
 # Route for the main page
@@ -97,6 +122,11 @@ def index():
         # Get the latest count and timestamp
         latest_count = df['agree_count'].iloc[-1] if not df.empty else 'No data available'
         latest_timestamp = df['timestamp'].iloc[-1].strftime('%Y-%m-%d %H:%M:%S') if not df.empty else 'No data available'
+
+        # Predict the date when the count will reach 1,000,000
+        target_date = None
+        if latest_count < 1000000:
+            target_date = predict_target_date(df).strftime('%Y-%m-%d %H:%M:%S')
 
         # HTML template to display the graph and the latest count
         html_template = '''
@@ -134,7 +164,7 @@ def index():
                     font-size: 24px;
                     font-weight: bold;
                     color: #2980b9;
-                    margin-bottom: 20px;
+                    margin-bottom: 0px;
                 }
                 #graph-container {
                     margin-top: 20px;
@@ -184,6 +214,12 @@ def index():
                     color: #2980b9;
                     transition: all 0.5s ease-out;
                 }
+                .target-date {
+                    display: none;
+                    font-size: 17px;
+                    font-weight: bold;
+                    color: #2980b9;
+                }
             </style>
             <script>
                 document.addEventListener('DOMContentLoaded', function() {
@@ -216,7 +252,17 @@ def index():
                             animateValue(latestCountElement, currentCount, newCount, 1000);
                             document.getElementById('latest-timestamp').textContent = data.latest_timestamp;
                             document.getElementById('graph-image').src = data.graph + '?t=' + new Date().getTime();
+                            if (data.target_date) {
+                                document.getElementById('target-date').style.display = 'block';
+                                document.getElementById('target-date').textContent = '100만 예상일시: ' + data.target_date;
+                            } else {
+                                document.getElementById('target-date').style.display = 'none';
+                            }
                         }
+                    });
+
+                    socket.on('user_count', function(data) {
+                        document.getElementById('user-count').textContent = data.count;
                     });
 
                     document.getElementById('stopUpdate').addEventListener('click', function() {
@@ -238,13 +284,17 @@ def index():
         <body>
             <div class="container">
                 <h1>윤석열 대통령 탄핵소추안 즉각 발의 요청에 관한 청원</h1>
-                <h2><a href="https://petitions-agreecount-02.fediverses.kr/">그래프로 보기</a> | <a href="https://petitions.assembly.go.kr/status/onGoing/14CBAF8CE5733410E064B49691C1987F">동의하러 가기</a></h2>
+                <h2><a href="https://petitions-agreecount-02.fediverses.kr/">그래프로 보기</a> | <a href="javascript:if(window.confirm('로딩에 시간이 다소 소요될 수 있습니다. 확인을 누르신 후 잠시 기다려주세요.')){window.open('https://petitions.assembly.go.kr/status/onGoing/14CBAF8CE5733410E064B49691C1987F');}">동의하러 가기</a> | <a href="https://twitter.com/intent/post?text=%23%ED%83%84%ED%95%B5%EC%B2%AD%EC%9B%90+%EC%8B%A4%EC%8B%9C%EA%B0%84+%EB%8F%99%EC%9D%98%EC%88%98+%EB%B3%B4%EB%9F%AC%EA%B0%80%EA%B8%B0%0A&url=https%3A%2F%2Fpetitions-agreecount-01.fediverses.kr%2F%0A" target="_blank"><img src="https://petitions-agreecount-01.fediverses.kr/private/x-128.png" style="width: 28px;margin: -4px;"></a></h2>
                 <div class="current-count">
-                    Current: <span id="latest-count" class="rolling-number">{{ latest_count }}</span>
+                    현재 동의수: <span id="latest-count" class="rolling-number">{{ latest_count }}</span> 명
                     <br>
-                    <small>Last updated: <span id="latest-timestamp">{{ latest_timestamp }}</span></small>
+                    <small>기준일시: <span id="latest-timestamp">{{ latest_timestamp }}</span></small>
                 </div>
+                <div id="target-date" class="target-date"></div>
                 <img id="graph-image" src="{{ url_for('graph_png') }}?t={{ latest_timestamp }}" alt="Agree Count Graph">
+                <div>
+                    <strong>Users Online (Image): <span id="user-count">0</span></strong> | <a href="https://petitions-agreecount-01.fediverses.kr/raw_data">평문데이터 보기</a>
+                </div>
                 <div class="footer">
                     <p>본 사이트는 국회와 관련이 있지 않으며 국회와 아무 연관이 있지 않습니다. 개인이 사용하기 위하여 만들은 사이트이며, 국회 서버에 심한 부하를 주지 않도록 설계하였습니다.</p>
                     <p>본 사이트는 운영이 중단될 수 있으며, 기본 업데이트 빈도는 5초+(국회서버 응답시간) 입니다.</p>
@@ -256,17 +306,27 @@ def index():
 
         app.logger.info("Index page loaded successfully")
 
-        return render_template_string(html_template, latest_count=latest_count, latest_timestamp=latest_timestamp)
+        return render_template_string(html_template, latest_count=latest_count, latest_timestamp=latest_timestamp, target_date=target_date)
     except Exception as e:
         app.logger.error(f"Error loading index: {e}")
         return make_response(f"Error loading page: {e}", 500)
 
 @socketio.on('connect')
 def handle_connect():
-    app.logger.info(f"Client connected at {datetime.now()}")
+    global user_count
+    user_count += 1
+    app.logger.info(f"Client connected at {datetime.now()}. Total users: {user_count}")
+    socketio.emit('user_count', {'count': user_count})
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    global user_count
+    user_count -= 1
+    app.logger.info(f"Client disconnected at {datetime.now()}. Total users: {user_count}")
+    socketio.emit('user_count', {'count': user_count})
 
 if __name__ == '__main__':
     thread = threading.Thread(target=background_update)
     thread.daemon = True
     thread.start()
-    socketio.run(app, debug=True, port=5173)
+    socketio.run(app, debug=True, port=5174)
