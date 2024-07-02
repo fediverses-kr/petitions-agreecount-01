@@ -1,8 +1,9 @@
-from flask import Flask, render_template_string, send_file, send_from_directory, make_response
+from flask import Flask, render_template_string, send_file, send_from_directory, make_response, jsonify
 import matplotlib
 matplotlib.use('Agg')  # Use Agg backend for rendering plots
 import matplotlib.pyplot as plt
 import pandas as pd
+from flask_cors import CORS
 import numpy as np  # Import numpy
 from datetime import datetime, timedelta
 from flask_socketio import SocketIO, emit
@@ -13,8 +14,14 @@ import io
 import logging
 
 app = Flask(__name__)
+CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*")
-logging.basicConfig(level=logging.DEBUG)  # Set logging level to DEBUG for troubleshooting
+logging.basicConfig(level=logging.WARNING)  # Set logging level to DEBUG for troubleshooting
+app.logger.setLevel(logging.WARNING)
+
+# Configure logging to suppress INFO messages
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.WARNING)
 
 update_active = True  # Global variable to control updates
 graph_cache = None  # Cache for the graph image
@@ -96,6 +103,11 @@ def serve_image(filename):
 def serve_file():
     return send_from_directory('.', 'AgreeCountLog.txt')
 
+# Update History
+@app.route('/update-history')
+def update_history():
+    return send_from_directory('.', 'update_history.html')
+
 # Route for serving the graph image
 @app.route('/graph.png')
 def graph_png():
@@ -103,6 +115,75 @@ def graph_png():
     if graph_cache is None:
         update_graph_cache_and_prediction()
     return send_file(io.BytesIO(graph_cache.getvalue()), mimetype='image/png')
+
+def read_data_from_file(filename):
+    with open(filename, 'r') as file:
+        return file.readlines()
+
+cache = {
+    'data': None,
+    'timestamp': 0
+}
+cache_lock = threading.Lock()
+
+# One Hour Update JSON for candle.gobongs.com
+@app.route('/api/1_hour_update/json')
+@app.route('/api/1h-update/json')
+def hourly_update():
+    current_time = time.time()
+    
+    # Check if cache is valid (within 10 seconds)
+    if cache['data'] is not None and (current_time - cache['timestamp']) < 60:
+        return jsonify(cache['data'])
+    
+    with cache_lock:
+        # Double check the cache inside the lock
+        if cache['data'] is not None and (current_time - cache['timestamp']) < 60:
+            return jsonify(cache['data'])
+
+        data = read_data_from_file('AgreeCountLog.txt')
+        hourly_data = {}
+        
+        for entry in data:
+            entry = entry.strip()  # Remove any trailing newline characters
+            if not entry:  # Skip empty lines
+                continue
+            
+            try:
+                timestamp_str, count_str = entry.split(": Agree Count = ")
+                timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+                count = int(count_str)
+            except ValueError:
+                # Handle the case where the line does not match the expected format
+                continue
+            
+            # Round down to the nearest hour
+            hour_key = timestamp.replace(minute=0, second=0, microsecond=0)
+            
+            # Always update the count, this will keep the latest count for each hour
+            hourly_data[hour_key] = count
+        
+        # Sort the hours
+        sorted_hours = sorted(hourly_data.keys())
+        
+        result = []
+        for i in range(len(sorted_hours) - 2):  # Adjust the range to exclude the last hour
+            current_hour = sorted_hours[i]
+            next_hour = sorted_hours[i + 1]
+            
+            joined = hourly_data[next_hour] - hourly_data[current_hour]
+            
+            result.append({
+                'hour': (current_hour + timedelta(hours=1)).isoformat(),  # Shift to +1 hour
+                'count': hourly_data[current_hour],
+                'joined': joined
+            })
+        
+        # Update cache
+        cache['data'] = result
+        cache['timestamp'] = current_time
+    
+    return jsonify(result)
 
 # Route for the main page
 @app.route('/')
@@ -136,6 +217,15 @@ def index():
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>Agree Count Graph</title>
+            <meta property="og:title" content="Agree Count Graph">
+            <meta name="twitter:card" content="Agree Count Graph">
+            <meta property="og:url" content="https://petitions-agreecount-01.fediverses.kr/">
+            <meta name="twitter:url" content="https://petitions-agreecount-01.fediverses.kr/">
+            <meta name="twitter:title" content="청원 동의수 실시간 현황 및 그래프">
+            <meta property="og:image" content="https://petitions-agreecount-01.fediverses.kr/graph.png">
+            <meta name="twitter:image" content="https://petitions-agreecount-01.fediverses.kr/graph.png">
+            <meta property="og:description" content="실시간 청원 동의수 현황 및 그래프를 확인할 수 있습니다.">
+            <meta name="twitter:description" content="실시간 청원 동의수 현황 및 그래프를 확인할 수 있습니다.">
             <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
             <style>
                 body {
@@ -298,6 +388,7 @@ def index():
                 <div class="footer">
                     <p>본 사이트는 국회와 관련이 있지 않으며 국회와 아무 연관이 있지 않습니다. 개인이 사용하기 위하여 만들은 사이트이며, 국회 서버에 심한 부하를 주지 않도록 설계하였습니다.</p>
                     <p>본 사이트는 운영이 중단될 수 있으며, 기본 업데이트 빈도는 5초+(국회서버 응답시간) 입니다.</p>
+                    <p><a href="https://petitions-agreecount-01.fediverses.kr/update-history">업데이트 기록</a></p>
                 </div>
             </div>
         </body>
@@ -329,4 +420,4 @@ if __name__ == '__main__':
     thread = threading.Thread(target=background_update)
     thread.daemon = True
     thread.start()
-    socketio.run(app, debug=True, port=5174)
+    socketio.run(app, debug=True, port=5120)
