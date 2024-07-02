@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wait Time Graph</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f4f4f4;
+        }
+        #graph-container {
+            margin-top: 20px;
+            width: 100%;
+            height: 100%;
+        }
+        #graph {
+            width: 100%;
+            height: 100%;
+        }
+        @media (max-width: 600px) {
+            body {
+                padding: 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="graph-container">
+        <div id="current-count"><h2>현재 대기인원: <span id="latest-count">0</span> 명</h2></div>
+        <div id="graph"></div>
+    </div>
+    <script>
+        async function fetchInitialData() {
+            try {
+                const response = await fetch('/initial-data');
+                const data = await response.json();
+                updateGraph(data);
+                document.getElementById('latest-count').textContent = data.latest_count;
+            } catch (error) {
+                console.error('Error fetching initial data:', error);
+            }
+        }
+
+        function updateGraph(data) {
+            Plotly.newPlot('graph', [{
+                x: data.times,
+                y: data.waits,
+                type: 'scatter'
+            }], {
+                yaxis: {
+                    tickformat: ',d'
+                }
+            }, {responsive: true});
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            fetchInitialData();
+
+            var socket = io();
+
+            socket.on('connect', function() {
+                console.log('WebSocket connected');
+            });
+
+            socket.on('update', function(data) {
+                console.log('Received update:', data);
+                updateGraph(data);
+                document.getElementById('latest-count').textContent = data.latest_count;
+            });
+        });
+    </script>
+</body>
+</html>
