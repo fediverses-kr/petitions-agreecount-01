@@ -8,9 +8,19 @@ import time
 import os
 import json
 import plotly
+import logging
 
 app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins="*")
+
+logging.basicConfig(level=logging.WARNING)  # Set logging level to DEBUG for troubleshooting
+app.logger.setLevel(logging.WARNING)
+
+# Configure logging to suppress INFO messages
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.WARNING)
+
+user_count = 0  # Global counter for connected users
 
 # Function to read the log file and return a DataFrame
 def read_log_file(file_path):
@@ -48,7 +58,7 @@ def check_file_changes():
     last_modified = os.path.getmtime(file_path)
     
     while True:
-        time.sleep(5)
+        time.sleep(1)
         if update_active:
             current_modified = os.path.getmtime(file_path)
             if current_modified > last_modified:
@@ -77,6 +87,16 @@ def index():
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Agree Count Graph</title>
+        <meta property="og:title" content="Agree Count Graph">
+        <meta name="twitter:card" content="Agree Count Graph">
+        <meta property="og:url" content="https://petitions-agreecount-01.fediverses.kr/">
+        <meta name="twitter:url" content="https://petitions-agreecount-01.fediverses.kr/">
+        <meta name="twitter:title" content="청원 동의수 실시간 현황 및 그래프">
+        <meta property="og:image" content="https://petitions-agreecount-01.fediverses.kr/graph.png">
+        <meta name="twitter:image" content="https://petitions-agreecount-01.fediverses.kr/graph.png">
+        <meta property="og:description" content="실시간 청원 동의수 현황 및 그래프를 확인할 수 있습니다.">
+        <meta name="twitter:description" content="실시간 청원 동의수 현황 및 그래프를 확인할 수 있습니다.">
+
         <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
         <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
         <style>
@@ -150,6 +170,9 @@ def index():
             #resumeUpdate:hover {
                 background-color: #27ae60;
             }
+            .nsewdrag.drag {
+                fill: #E2E2E2 !important;
+            }
         </style>
         <script>
             document.addEventListener('DOMContentLoaded', function() {
@@ -172,6 +195,10 @@ def index():
                     }
                 });
 
+                socket.on('user_count', function(data) {
+                    document.getElementById('user-count').textContent = data.count;
+                });
+
                 document.getElementById('stopUpdate').addEventListener('click', function() {
                     updateActive = false;
                     this.style.display = 'none';
@@ -189,7 +216,7 @@ def index():
     <body>
         <div class="container">
             <h1>윤석열 대통령 탄핵소추안 즉각 발의 요청에 관한 청원</h1>
-            <h2><a href="https://petitions-agreecount-01.fediverses.kr/">이미지로 보기</a></h2>
+            <h2><a href="https://petitions-agreecount-01.fediverses.kr/">이미지로 보기</a> | <a href="javascript:if(window.confirm('로딩에 시간이 다소 소요될 수 있습니다. 확인을 누르신 후 잠시 기다려주세요.')){window.open('https://petitions.assembly.go.kr/status/onGoing/14CBAF8CE5733410E064B49691C1987F');}">동의하러 가기</a> | <a href="https://twitter.com/intent/post?text=%23%ED%83%84%ED%95%B5%EC%B2%AD%EC%9B%90+%EC%8B%A4%EC%8B%9C%EA%B0%84+%EB%8F%99%EC%9D%98%EC%88%98+%EB%B3%B4%EB%9F%AC%EA%B0%80%EA%B8%B0%0A&url=https%3A%2F%2Fpetitions-agreecount-01.fediverses.kr%2F%0A" target="_blank"><img src="https://petitions-agreecount-01.fediverses.kr/private/x-128.png" style="width: 28px;margin: -4px;"></a></h2>
             <div class="current-count">
                 Current: <span id="latest-count">{{ latest_count }}</span> 
                 <br>
@@ -198,10 +225,11 @@ def index():
             <button id="stopUpdate" class="button">Stop Update</button>
             <button id="resumeUpdate" class="button">Resume Update</button>
             <div id="graph-container"></div>
-            <h3><a href="https://namu.wiki/thread/RoughFurtiveAngryFather#19">나O위키에서 이 웹사이트의 "동의하러 가기"라는 문구가 정치적으로 편향된 내용이라고 판단했음을 발견하여, 이 사이트는 정치적으로 편향된 내용을 올릴 의도가 없음을 알리기 위해 바로가기 링크를 삭제하였습니다.</a></h3>
+            <strong>Users Online (Graph): <span id="user-count">0</span></strong> | <a href="https://petitions-agreecount-01.fediverses.kr/raw_data">평문데이터 보기</a>
             <div class="footer">
+                <p>그래프에서 작업하실 때는 Stop Update 버튼을 눌러 자동업데이트를 중단하신 후 작업해주세요. 확대, 축소, 이동 등 여러 작업이 가능합니다.</p>
                 <p>본 사이트는 국회와 관련이 있지 않으며 국회와 아무 연관이 있지 않습니다. 개인이 사용하기 위하여 만들은 사이트이며, 국회 서버에 심한 부하를 주지 않도록 설계하였습니다.</p>
-                <p>본 사이트는 운영이 중단될 수 있으며, 기본 업데이트 빈도는 5초+(국회서버 응답시간) 입니다.</p>
+                <p>본 사이트는 운영이 중단될 수 있으며, 기본 업데이트 빈도는 2초+(국회서버 응답시간)+(서버내부 처리시간) 입니다.</p>
             </div>
         </div>
     </body>
@@ -212,7 +240,17 @@ def index():
 
 @socketio.on('connect')
 def handle_connect():
-    print(f"Client connected at {datetime.now()}")
+    global user_count
+    user_count += 1
+    print(f"Client connected at {datetime.now()}. Total users: {user_count}")
+    socketio.emit('user_count', {'count': user_count})
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    global user_count
+    user_count -= 1
+    print(f"Client disconnected at {datetime.now()}. Total users: {user_count}")
+    socketio.emit('user_count', {'count': user_count})
 
 if __name__ == '__main__':
     thread = threading.Thread(target=check_file_changes)
