@@ -4,10 +4,10 @@ import time
 from datetime import datetime
 import os
 
-MAX_LOG_LINES = 4000
+MAX_LOG_LINES = 80000
 LOG_FILE_NAME = "AgreeCountLog.txt"
-TIMEOUT = 60  # seconds
-RETRY_DELAY = 5  # seconds
+TIMEOUT = 45  # seconds
+RETRY_DELAY = 3  # seconds
 
 def get_agree_count():
     url = "https://petitions.assembly.go.kr/api/petits/14CBAF8CE5733410E064B49691C1987F?petitId=14CBAF8CE5733410E064B49691C1987F&sttusCode="
@@ -66,7 +66,7 @@ def main():
         if agree_count is not None:
             log_agree_count(agree_count)
             print(f"Logged agree count: {agree_count}")
-        time.sleep(5)
+        time.sleep(RETRY_DELAY)
 
 if __name__ == "__main__":
     main()
