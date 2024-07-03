@@ -12,6 +12,10 @@ import time
 import os
 import io
 import logging
+from functools import wraps
+from cachetools import TTLCache
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 app = Flask(__name__)
 CORS(app)
@@ -67,7 +71,7 @@ def update_graph_cache_and_prediction():
             latest_count = df['agree_count'].iloc[-1]
             latest_timestamp = df['timestamp'].iloc[-1].strftime('%Y-%m-%d %H:%M:%S')
             target_date = None
-            if latest_count < 1000000:
+            if latest_count < 2000000:
                 target_date = predict_target_date(df).strftime('%Y-%m-%d %H:%M:%S')
             socketio.emit('update', {
                 'latest_count': str(latest_count),
@@ -84,7 +88,7 @@ def background_update():
         time.sleep(1)
 
 # Function to predict when the agree count will reach 1,000,000
-def predict_target_date(df, target=1000000):
+def predict_target_date(df, target=2000000):
     df['time_diff'] = (df['timestamp'] - df['timestamp'].min()).dt.total_seconds()
     model = np.polyfit(df['time_diff'], df['agree_count'], 1)
     slope = model[0]
@@ -125,63 +129,78 @@ cache = {
     'timestamp': 0
 }
 cache_lock = threading.Lock()
+# Initialize rate limiter
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["5000 per minute", "200000 per hour"]
+)
 
-# One Hour Update JSON for candle.gobongs.com
+# Initialize cache
+cache = TTLCache(maxsize=1000, ttl=60)
+
+# ... (rest of the original code remains the same)
+
+# Caching decorator
+def cached(timeout=60):
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            cache_key = f.__name__ + str(args) + str(kwargs)
+            cached_result = cache.get(cache_key)
+            if cached_result is not None:
+                return cached_result
+            result = f(*args, **kwargs)
+            cache[cache_key] = result
+            return result
+        return decorated_function
+    return decorator
+
+# Modified route with caching and rate limiting
 @app.route('/api/1_hour_update/json')
 @app.route('/api/1h-update/json')
+@limiter.limit("5000 per minute")
+@cached(timeout=60)
 def hourly_update():
     current_time = time.time()
     
-    # Check if cache is valid (within 10 seconds)
-    if cache['data'] is not None and (current_time - cache['timestamp']) < 60:
-        return jsonify(cache['data'])
+    data = read_data_from_file('AgreeCountLog.txt')
+    hourly_data = {}
     
-    with cache_lock:
-        # Double check the cache inside the lock
-        if cache['data'] is not None and (current_time - cache['timestamp']) < 60:
-            return jsonify(cache['data'])
-
-        data = read_data_from_file('AgreeCountLog.txt')
-        hourly_data = {}
+    for entry in data:
+        entry = entry.strip()  # Remove any trailing newline characters
+        if not entry:  # Skip empty lines
+            continue
         
-        for entry in data:
-            entry = entry.strip()  # Remove any trailing newline characters
-            if not entry:  # Skip empty lines
-                continue
-            
-            try:
-                timestamp_str, count_str = entry.split(": Agree Count = ")
-                timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
-                count = int(count_str)
-            except ValueError:
-                # Handle the case where the line does not match the expected format
-                continue
-            
-            # Round down to the nearest hour
-            hour_key = timestamp.replace(minute=0, second=0, microsecond=0)
-            
-            # Always update the count, this will keep the latest count for each hour
-            hourly_data[hour_key] = count
+        try:
+            timestamp_str, count_str = entry.split(": Agree Count = ")
+            timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+            count = int(count_str)
+        except ValueError:
+            # Handle the case where the line does not match the expected format
+            continue
         
-        # Sort the hours
-        sorted_hours = sorted(hourly_data.keys())
+        # Round down to the nearest hour
+        hour_key = timestamp.replace(minute=0, second=0, microsecond=0)
         
-        result = []
-        for i in range(len(sorted_hours) - 2):  # Adjust the range to exclude the last hour
-            current_hour = sorted_hours[i]
-            next_hour = sorted_hours[i + 1]
-            
-            joined = hourly_data[next_hour] - hourly_data[current_hour]
-            
-            result.append({
-                'hour': (current_hour + timedelta(hours=1)).isoformat(),  # Shift to +1 hour
-                'count': hourly_data[current_hour],
-                'joined': joined
-            })
+        # Always update the count, this will keep the latest count for each hour
+        hourly_data[hour_key] = count
+    
+    # Sort the hours
+    sorted_hours = sorted(hourly_data.keys())
+    
+    result = []
+    for i in range(len(sorted_hours) - 2):  # Adjust the range to exclude the last hour
+        current_hour = sorted_hours[i]
+        next_hour = sorted_hours[i + 1]
         
-        # Update cache
-        cache['data'] = result
-        cache['timestamp'] = current_time
+        joined = hourly_data[next_hour] - hourly_data[current_hour]
+        
+        result.append({
+            'hour': (current_hour + timedelta(hours=1)).isoformat(),  # Shift to +1 hour
+            'count': hourly_data[current_hour],
+            'joined': joined
+        })
     
     return jsonify(result)
 
@@ -206,7 +225,7 @@ def index():
 
         # Predict the date when the count will reach 1,000,000
         target_date = None
-        if latest_count < 1000000:
+        if latest_count < 2000000:
             target_date = predict_target_date(df).strftime('%Y-%m-%d %H:%M:%S')
 
         # HTML template to display the graph and the latest count
@@ -341,10 +360,10 @@ def index():
                             var newCount = parseInt(data.latest_count);
                             animateValue(latestCountElement, currentCount, newCount, 1000);
                             document.getElementById('latest-timestamp').textContent = data.latest_timestamp;
-                            document.getElementById('graph-image').src = data.graph + '?t=' + new Date().getTime();
+                            document.getElementById('graph-image').src = data.graph + '?t=' + data.latest_timestamp;
                             if (data.target_date) {
                                 document.getElementById('target-date').style.display = 'block';
-                                document.getElementById('target-date').textContent = '100만 예상일시: ' + data.target_date;
+                                document.getElementById('target-date').textContent = '200만 예상일시: ' + data.target_date;
                             } else {
                                 document.getElementById('target-date').style.display = 'none';
                             }
@@ -374,7 +393,7 @@ def index():
         <body>
             <div class="container">
                 <h1>윤석열 대통령 탄핵소추안 즉각 발의 요청에 관한 청원</h1>
-                <h2><a href="https://petitions-agreecount-02.fediverses.kr/">그래프로 보기</a> | <a href="javascript:if(window.confirm('로딩에 시간이 다소 소요될 수 있습니다. 확인을 누르신 후 잠시 기다려주세요.')){window.open('https://petitions.assembly.go.kr/status/onGoing/14CBAF8CE5733410E064B49691C1987F');}">동의하러 가기</a> | <a href="https://twitter.com/intent/post?text=%23%ED%83%84%ED%95%B5%EC%B2%AD%EC%9B%90+%EC%8B%A4%EC%8B%9C%EA%B0%84+%EB%8F%99%EC%9D%98%EC%88%98+%EB%B3%B4%EB%9F%AC%EA%B0%80%EA%B8%B0%0A&url=https%3A%2F%2Fpetitions-agreecount-01.fediverses.kr%2F%0A" target="_blank"><img src="https://petitions-agreecount-01.fediverses.kr/private/x-128.png" style="width: 28px;margin: -4px;"></a></h2>
+                <h2><a href="https://petitions-agreecount-02.fediverses.kr/">그래프로 보기</a> | <a href="javascript:if(window.confirm('로딩에 시간이 다소 소요될 수 있습니다. 확인을 누르신 후 잠시 기다려주세요.')){window.open('https://petitions.assembly.go.kr/status/onGoing/14CBAF8CE5733410E064B49691C1987F');}">동의하러 가기</a> (<a href="https://petitions-waitcount-01.fediverses.kr/">대기열</a>) | <a href="https://twitter.com/intent/post?text=%23%ED%83%84%ED%95%B5%EC%B2%AD%EC%9B%90+%EC%8B%A4%EC%8B%9C%EA%B0%84+%EB%8F%99%EC%9D%98%EC%88%98+%EB%B3%B4%EB%9F%AC%EA%B0%80%EA%B8%B0%0A&url=https%3A%2F%2Fpetitions-agreecount-01.fediverses.kr%2F%0A" target="_blank"><img src="https://petitions-agreecount-01.fediverses.kr/private/x-128.png" style="width: 28px;margin: -4px;"></a></h2>
                 <div class="current-count">
                     현재 동의수: <span id="latest-count" class="rolling-number">{{ latest_count }}</span> 명
                     <br>
@@ -420,4 +439,4 @@ if __name__ == '__main__':
     thread = threading.Thread(target=background_update)
     thread.daemon = True
     thread.start()
-    socketio.run(app, debug=True, port=5120)
+    socketio.run(app, debug=False, port=5120)
