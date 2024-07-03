@@ -216,7 +216,7 @@ def index():
     <body>
         <div class="container">
             <h1>윤석열 대통령 탄핵소추안 즉각 발의 요청에 관한 청원</h1>
-            <h2><a href="https://petitions-agreecount-01.fediverses.kr/">이미지로 보기</a> | <a href="javascript:if(window.confirm('로딩에 시간이 다소 소요될 수 있습니다. 확인을 누르신 후 잠시 기다려주세요.')){window.open('https://petitions.assembly.go.kr/status/onGoing/14CBAF8CE5733410E064B49691C1987F');}">동의하러 가기</a> | <a href="https://twitter.com/intent/post?text=%23%ED%83%84%ED%95%B5%EC%B2%AD%EC%9B%90+%EC%8B%A4%EC%8B%9C%EA%B0%84+%EB%8F%99%EC%9D%98%EC%88%98+%EB%B3%B4%EB%9F%AC%EA%B0%80%EA%B8%B0%0A&url=https%3A%2F%2Fpetitions-agreecount-01.fediverses.kr%2F%0A" target="_blank"><img src="https://petitions-agreecount-01.fediverses.kr/private/x-128.png" style="width: 28px;margin: -4px;"></a></h2>
+            <h2><a href="https://petitions-agreecount-01.fediverses.kr/">이미지로 보기</a> | <a href="javascript:if(window.confirm('로딩에 시간이 다소 소요될 수 있습니다. 확인을 누르신 후 잠시 기다려주세요.')){window.open('https://petitions.assembly.go.kr/status/onGoing/14CBAF8CE5733410E064B49691C1987F');}">동의하러 가기</a> (<a href="https://petitions-waitcount-01.fediverses.kr/">대기열</a>) | <a href="https://twitter.com/intent/post?text=%23%ED%83%84%ED%95%B5%EC%B2%AD%EC%9B%90+%EC%8B%A4%EC%8B%9C%EA%B0%84+%EB%8F%99%EC%9D%98%EC%88%98+%EB%B3%B4%EB%9F%AC%EA%B0%80%EA%B8%B0%0A&url=https%3A%2F%2Fpetitions-agreecount-01.fediverses.kr%2F%0A" target="_blank"><img src="https://petitions-agreecount-01.fediverses.kr/private/x-128.png" style="width: 28px;margin: -4px;"></a></h2>
             <div class="current-count">
                 Current: <span id="latest-count">{{ latest_count }}</span> 
                 <br>
